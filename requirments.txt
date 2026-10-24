@@ -1,0 +1,5 @@
+django
+redis
+channels
+channels-redis
+daphne
