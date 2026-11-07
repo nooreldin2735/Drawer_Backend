@@ -148,6 +148,24 @@ class ShapeService:
                 version=version,
             )
 
+    async def has_shapes(self, board_id: str) -> bool:
+        """Returns True if the board has in-memory shapes loaded."""
+        async with self._lock:
+            return bool(self._board_shapes.get(board_id))
+
+    async def load_snapshot(self, board_id: str, shapes_data: list[dict[str, Any]], version: int = 0) -> None:
+        """Loads shapes from persistent storage into memory."""
+        async with self._lock:
+            self._ensure_board(board_id)
+            self._board_shapes[board_id] = {}
+            for s_dict in shapes_data:
+                try:
+                    shape = Shape.from_dict(s_dict)
+                    self._board_shapes[board_id][shape.id] = shape
+                except Exception:
+                    pass
+            self._board_versions[board_id] = max(self._board_versions[board_id], version)
+
     async def clear_board(self, board_id: str) -> None:
         """Removes all shapes from a board."""
         async with self._lock:

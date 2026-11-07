@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Union
 from urllib.parse import parse_qs
 
+from DatabaseEngine import db_engine
 from .shape_service import ShapeService, shape_service
 from .types import (
     CursorMoveOperation,
@@ -81,6 +82,21 @@ class WhiteboardService:
 
         return room_name, user_id
 
+    def extract_user_identity(self, scope: dict[str, Any]) -> Tuple[str, bool]:
+        """
+        Extracts user identity from session scope:
+        If authenticated, returns (username, True).
+        If not authenticated, returns ('Guest', False).
+        """
+        user = scope.get("user")
+        if user and getattr(user, "is_authenticated", False):
+            return user.username, True
+
+        query_string = scope.get("query_string", b"").decode("utf-8")
+        parsed_query = parse_qs(query_string)
+        guest_param = parsed_query.get("userName", ["Guest"])[0]
+        return guest_param or "Guest", False
+
     def get_group_name(self, board_id: str) -> str:
         """Returns the Channel Layer group name for a given board."""
         # Sanitize characters for Django channel layer group names
@@ -90,8 +106,39 @@ class WhiteboardService:
     async def get_initial_snapshot(self, board_id: str) -> SnapshotMessage:
         """
         Retrieves the initial snapshot of all shapes for the newly joined client.
+        Loads from DatabaseEngine if not yet in memory.
         """
+        if not await self.shape_service.has_shapes(board_id):
+            persistent_snapshot = await db_engine.load_initial_snapshot(board_id)
+            if persistent_snapshot:
+                await self.shape_service.load_snapshot(
+                    board_id=board_id,
+                    shapes_data=persistent_snapshot.get("shapes", []),
+                    version=persistent_snapshot.get("version", 0),
+                )
+
         return await self.shape_service.get_snapshot(board_id)
+
+    async def save_session_closure(
+        self,
+        board_id: str,
+        user: Optional[Any] = None,
+        saved_by_name: str = "Guest",
+    ) -> None:
+        """
+        Persists the durable whiteboard state (shapes, version) to PostgreSQL via DatabaseEngine
+        when the session closes.
+        """
+        snapshot = await self.shape_service.get_snapshot(board_id)
+        snapshot_dict = snapshot.to_dict()
+        await db_engine.save_session_closure(
+            board_id=board_id,
+            snapshot=snapshot_dict,
+            version=snapshot.version,
+            user=user if user and getattr(user, "is_authenticated", False) else None,
+            saved_by_name=saved_by_name,
+            note="Session closed checkpoint",
+        )
 
     async def process_operation(
         self,

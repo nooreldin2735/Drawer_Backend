@@ -35,6 +35,7 @@ INSTALLED_APPS = [
     'daphne',
     'channels',
     'WebSockets',
+    'Dashboard',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -43,7 +44,24 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 ]
 
+class SimpleCorsMiddleware:
+    """Lightweight CORS middleware allowing API access from Vite frontend."""
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if request.method == "OPTIONS":
+            from django.http import HttpResponse
+            response = HttpResponse()
+        else:
+            response = self.get_response(request)
+        response["Access-Control-Allow-Origin"] = "*"
+        response["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+        response["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+        return response
+
 MIDDLEWARE = [
+    'CanvasDrawerProject.settings.SimpleCorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -99,12 +117,51 @@ CHANNEL_LAYERS = {
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+DB_ENGINE = os.environ.get('DB_ENGINE', '').lower()
+POSTGRES_DB = os.environ.get('POSTGRES_DB', os.environ.get('DB_NAME', 'canvas_db'))
+POSTGRES_USER = os.environ.get('POSTGRES_USER', os.environ.get('DB_USER', 'postgres'))
+POSTGRES_PASSWORD = os.environ.get('POSTGRES_PASSWORD', os.environ.get('DB_PASSWORD', 'postgres'))
+POSTGRES_HOST = os.environ.get('POSTGRES_HOST', os.environ.get('DB_HOST', 'localhost'))
+POSTGRES_PORT = os.environ.get('POSTGRES_PORT', os.environ.get('DB_PORT', '5432'))
+
+if DB_ENGINE in ('postgres', 'postgresql') or os.environ.get('USE_POSTGRES') == '1':
+    # Verify driver is available before configuring postgres backend
+    try:
+        import psycopg2  # noqa: F401
+        has_pg = True
+    except ImportError:
+        try:
+            import psycopg  # noqa: F401
+            has_pg = True
+        except ImportError:
+            has_pg = False
+
+    if has_pg:
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.postgresql',
+                'NAME': POSTGRES_DB,
+                'USER': POSTGRES_USER,
+                'PASSWORD': POSTGRES_PASSWORD,
+                'HOST': POSTGRES_HOST,
+                'PORT': POSTGRES_PORT,
+            }
+        }
+    else:
+        # Fall back to sqlite if postgresql driver is not yet installed in container
+        DATABASES = {
+            'default': {
+                'ENGINE': 'django.db.backends.sqlite3',
+                'NAME': BASE_DIR / 'db.sqlite3',
+            }
+        }
+else:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+        }
     }
-}
 
 
 # Password validation

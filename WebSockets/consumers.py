@@ -7,6 +7,7 @@ All state, shape manipulation, validation, and business logic are delegated to W
 import json
 import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
+from DatabaseEngine import db_engine
 from .services import ProcessOperationRequest, whiteboard_service
 
 logger = logging.getLogger(__name__)
@@ -20,8 +21,9 @@ class CanvasConsumer(AsyncWebsocketConsumer):
     """
 
     async def connect(self):
-        # 1. Resolve room and user info via domain service
+        # 1. Resolve room and user identity via domain service
         self.room_name, self.user_id = whiteboard_service.extract_room_info(self.scope)
+        self.user_name, self.is_authenticated = whiteboard_service.extract_user_identity(self.scope)
         self.room_group_name = whiteboard_service.get_group_name(self.room_name)
 
         # 2. Join the channel layer group
@@ -30,15 +32,36 @@ class CanvasConsumer(AsyncWebsocketConsumer):
             self.channel_name
         )
 
-        # 3. Accept WebSocket connection
+        # 3. Track active session participant in DatabaseEngine
+        await db_engine.register_session_participant(
+            board_id=self.room_name,
+            channel_name=self.channel_name,
+            user=self.scope.get("user"),
+            display_name=self.user_name,
+        )
+
+        # 4. Accept WebSocket connection
         await self.accept()
 
-        # 4. Request initial snapshot from service and deliver to the client
+        # 5. Request initial snapshot from service (loads from PostgreSQL if needed)
         snapshot = await whiteboard_service.get_initial_snapshot(self.room_name)
         await self.send(text_data=snapshot.to_json())
 
     async def disconnect(self, close_code):
-        # Leave channel layer group
+        # 1. Unregister participant from DatabaseEngine session manager
+        board_id, is_empty, remaining = await db_engine.unregister_session_participant(self.channel_name)
+
+        # 2. Session closure: persist durable drawing state to PostgreSQL via DatabaseEngine
+        try:
+            await whiteboard_service.save_session_closure(
+                board_id=self.room_name,
+                user=self.scope.get("user"),
+                saved_by_name=self.user_name,
+            )
+        except Exception as exc:
+            logger.warning("Could not persist session closure for board %s: %s", self.room_name, exc)
+
+        # 3. Leave channel layer group
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
