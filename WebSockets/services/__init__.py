@@ -24,7 +24,13 @@ from .types import (
     WhiteboardOperation,
     parse_operation,
 )
-from .whiteboard_service import ProcessResult, WhiteboardService, whiteboard_service
+from .whiteboard_service import (
+    OperationRequest,
+    ProcessOperationRequest,
+    ProcessResult,
+    WhiteboardService,
+    whiteboard_service,
+)
 
 __all__ = [
     # Types & Enums
@@ -46,10 +52,12 @@ __all__ = [
     "WhiteboardOperation",
     "WhiteboardMessage",
     "parse_operation",
-    # Services
+    # Services & Requests
     "ShapeService",
     "shape_service",
     "WhiteboardService",
     "whiteboard_service",
+    "ProcessOperationRequest",
+    "OperationRequest",
     "ProcessResult",
 ]

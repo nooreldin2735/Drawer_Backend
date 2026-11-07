@@ -27,6 +27,18 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ProcessOperationRequest:
+    """Encapsulates the input parameters for processing an incoming WebSocket operation."""
+    board_id: str
+    raw_data: Union[str, dict[str, Any]]
+    sender_channel_name: str = ""
+
+
+# Alias for concise reference
+OperationRequest = ProcessOperationRequest
+
+
+@dataclass
 class ProcessResult:
     """Encapsulates the output of processing a WebSocket message."""
     broadcast_data: Optional[dict[str, Any]] = None
@@ -83,18 +95,32 @@ class WhiteboardService:
 
     async def process_operation(
         self,
-        board_id: str,
-        raw_data: Union[str, dict[str, Any]],
-        sender_channel_name: str,
+        request: Optional[ProcessOperationRequest] = None,
+        *,
+        board_id: Optional[str] = None,
+        raw_data: Optional[Union[str, dict[str, Any]]] = None,
+        sender_channel_name: Optional[str] = None,
     ) -> ProcessResult:
         """
         Processes an incoming message from a WebSocket client:
+        - Accepts either a ProcessOperationRequest dataclass or individual arguments.
         - Validates and parses the envelope
         - Mutates persistent shape state via ShapeService
         - Prepares broadcast payloads for room participants
         """
+        if request is not None:
+            active_board_id = request.board_id
+            active_raw_data = request.raw_data
+            active_sender_channel_name = request.sender_channel_name
+        else:
+            if board_id is None or raw_data is None:
+                return ProcessResult(error="Missing required operation parameters")
+            active_board_id = board_id
+            active_raw_data = raw_data
+            active_sender_channel_name = sender_channel_name or ""
+
         try:
-            op: WhiteboardMessage = parse_operation(raw_data)
+            op: WhiteboardMessage = parse_operation(active_raw_data)
         except Exception as exc:
             logger.warning("Failed to parse incoming whiteboard operation: %s", exc)
             return ProcessResult(error=str(exc))
@@ -102,7 +128,7 @@ class WhiteboardService:
         # 1. Add Shape
         if isinstance(op, ShapeAddOperation):
             await self.shape_service.add_shape(
-                board_id=board_id,
+                board_id=active_board_id,
                 shape=op.payload.shape,
                 version=op.version,
             )
@@ -114,13 +140,13 @@ class WhiteboardService:
         # 2. Update Shape
         elif isinstance(op, ShapeUpdateOperation):
             updated_shape = await self.shape_service.update_shape(
-                board_id=board_id,
+                board_id=active_board_id,
                 shape_id=op.payload.id,
                 changes=op.payload.changes,
                 version=op.version,
             )
             if updated_shape is None:
-                logger.debug("Shape %s not found on board %s to update", op.payload.id, board_id)
+                logger.debug("Shape %s not found on board %s to update", op.payload.id, active_board_id)
 
             return ProcessResult(
                 broadcast_data=op.to_dict(),
@@ -130,7 +156,7 @@ class WhiteboardService:
         # 3. Remove Shape
         elif isinstance(op, ShapeRemoveOperation):
             await self.shape_service.remove_shape(
-                board_id=board_id,
+                board_id=active_board_id,
                 shape_id=op.payload.id,
                 version=op.version,
             )
@@ -148,7 +174,7 @@ class WhiteboardService:
 
         # 5. Snapshot request (if requested explicitly)
         elif isinstance(op, SnapshotMessage):
-            snapshot = await self.shape_service.get_snapshot(board_id)
+            snapshot = await self.shape_service.get_snapshot(active_board_id)
             return ProcessResult(
                 direct_response=snapshot.to_dict(),
                 op_type=OperationType.SNAPSHOT.value,

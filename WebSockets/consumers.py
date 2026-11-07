@@ -7,7 +7,7 @@ All state, shape manipulation, validation, and business logic are delegated to W
 import json
 import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
-from .services import whiteboard_service
+from .services import ProcessOperationRequest, whiteboard_service
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +49,12 @@ class CanvasConsumer(AsyncWebsocketConsumer):
             return
         print(text_data)
         # Delegate validation, shape mutations, and payload packaging to service
-        result = await whiteboard_service.process_operation(
+        request = ProcessOperationRequest(
             board_id=self.room_name,
             raw_data=text_data,
             sender_channel_name=self.channel_name,
         )
+        result = await whiteboard_service.process_operation(request)
 
         # Send direct response back to this client if required (e.g. snapshot, ack)
         if result.direct_response:
