@@ -21,33 +21,65 @@ class CanvasConsumer(AsyncWebsocketConsumer):
     """
 
     async def connect(self):
-        # 1. Resolve room and user identity via domain service
+        # 1. Resolve room, user identity, and invite code via domain service
         self.room_name, self.user_id = whiteboard_service.extract_room_info(self.scope)
         self.user_name, self.is_authenticated = whiteboard_service.extract_user_identity(self.scope)
+        self.invite_code = whiteboard_service.extract_invite_code(self.scope)
+
+        # 2. Access control: Validate that user/client joins via invite code (or as owner)
+        user = self.scope.get("user")
+        is_allowed, error_reason = await whiteboard_service.validate_session_access(
+            board_id=self.room_name,
+            invite_code=self.invite_code,
+            user=user,
+        )
+
+        if not is_allowed:
+            logger.warning(
+                "WebSocket connection rejected for room '%s' (user: %s): %s",
+                self.room_name,
+                self.user_name,
+                error_reason,
+            )
+            # Accept temporarily to dispatch error message then close with 4003
+            await self.accept()
+            await self.send(
+                text_data=json.dumps({
+                    "type": "error",
+                    "code": 4003,
+                    "message": error_reason or "Joining session requires a valid invite code.",
+                })
+            )
+            await self.close(code=4003)
+            return
+
         self.room_group_name = whiteboard_service.get_group_name(self.room_name)
 
-        # 2. Join the channel layer group
+        # 3. Join the channel layer group
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
 
-        # 3. Track active session participant in DatabaseEngine
+        # 4. Track active session participant in DatabaseEngine
         await db_engine.register_session_participant(
             board_id=self.room_name,
             channel_name=self.channel_name,
-            user=self.scope.get("user"),
+            user=user,
             display_name=self.user_name,
         )
 
-        # 4. Accept WebSocket connection
+        # 5. Accept WebSocket connection
         await self.accept()
 
-        # 5. Request initial snapshot from service (loads from PostgreSQL if needed)
+        # 6. Request initial snapshot from service (loads from PostgreSQL if needed)
         snapshot = await whiteboard_service.get_initial_snapshot(self.room_name)
         await self.send(text_data=snapshot.to_json())
 
     async def disconnect(self, close_code):
+        if not hasattr(self, "room_group_name"):
+            return
+
         # 1. Unregister participant from DatabaseEngine session manager
         board_id, is_empty, remaining = await db_engine.unregister_session_participant(self.channel_name)
 

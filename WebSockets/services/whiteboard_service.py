@@ -97,6 +97,37 @@ class WhiteboardService:
         guest_param = parsed_query.get("userName", ["Guest"])[0]
         return guest_param or "Guest", False
 
+    def extract_invite_code(self, scope: dict[str, Any]) -> str:
+        """
+        Extracts invite code from the connection scope:
+        Checks query param `inviteCode` or `invite_code` or `code`.
+        """
+        query_string = scope.get("query_string", b"").decode("utf-8")
+        parsed_query = parse_qs(query_string)
+        for key in ("inviteCode", "invite_code", "code"):
+            if key in parsed_query and parsed_query[key]:
+                return parsed_query[key][0].strip().upper()
+        return ""
+
+    async def validate_session_access(
+        self,
+        board_id: str,
+        invite_code: str,
+        user: Optional[Any] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Validates whether client is allowed to connect to the session.
+        Enforces that users can only join session via a valid invite code (or as authenticated owner).
+        """
+        is_allowed, wb, reason = await db_engine.verify_session_access_async(
+            board_id=board_id,
+            invite_code=invite_code,
+            user=user,
+        )
+        if not is_allowed:
+            return False, reason
+        return True, None
+
     def get_group_name(self, board_id: str) -> str:
         """Returns the Channel Layer group name for a given board."""
         # Sanitize characters for Django channel layer group names

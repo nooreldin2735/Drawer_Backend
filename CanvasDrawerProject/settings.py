@@ -60,6 +60,35 @@ class SimpleCorsMiddleware:
         response["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
         return response
 
+
+class BasicAuthMiddleware:
+    """
+    Standard HTTP Basic Authentication middleware:
+    If Authorization header with 'Basic <base64>' is provided and request.user
+    is not authenticated, authenticates against Django auth backend.
+    """
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        if not getattr(request, "user", None) or not request.user.is_authenticated:
+            auth_header = request.headers.get("Authorization") or request.META.get("HTTP_AUTHORIZATION", "")
+            if auth_header.startswith("Basic "):
+                try:
+                    import base64
+                    from django.contrib.auth import authenticate
+                    encoded = auth_header.split(" ", 1)[1].strip()
+                    decoded = base64.b64decode(encoded).decode("utf-8")
+                    if ":" in decoded:
+                        username, password = decoded.split(":", 1)
+                        user = authenticate(request, username=username, password=password)
+                        if user:
+                            request.user = user
+                except Exception:
+                    pass
+        return self.get_response(request)
+
+
 MIDDLEWARE = [
     'CanvasDrawerProject.settings.SimpleCorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
@@ -67,6 +96,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'CanvasDrawerProject.settings.BasicAuthMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -91,26 +121,36 @@ TEMPLATES = [
 WSGI_APPLICATION = 'CanvasDrawerProject.wsgi.application'
 ASGI_APPLICATION = 'CanvasDrawerProject.asgi.application'
 
-# Channel Layers (using channels-redis)
-REDIS_HOST = os.environ.get('REDIS_HOST', '127.0.0.1')
-REDIS_PORT = int(os.environ.get('REDIS_PORT', '6379'))
+# Channel Layers (using channels-redis for production, in-memory for testing)
+import sys
+TESTING = 'test' in sys.argv
 
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [
-                {
-                    'address': f'redis://{REDIS_HOST}:{REDIS_PORT}/0',
-                    'socket_timeout': None,
-                    'socket_connect_timeout': 5,
-                }
-            ],
-            'capacity': 1500,
-            'expiry': 10,
+if TESTING or os.environ.get('USE_IN_MEMORY_CHANNEL_LAYER') == '1':
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
         },
-    },
-}
+    }
+else:
+    REDIS_HOST = os.environ.get('REDIS_HOST', '127.0.0.1')
+    REDIS_PORT = int(os.environ.get('REDIS_PORT', '6379'))
+
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [
+                    {
+                        'address': f'redis://{REDIS_HOST}:{REDIS_PORT}/0',
+                        'socket_timeout': None,
+                        'socket_connect_timeout': 5,
+                    }
+                ],
+                'capacity': 1500,
+                'expiry': 10,
+            },
+        },
+    }
 
 
 

@@ -125,9 +125,45 @@ class DatabaseEngine:
         """Async version of get_user_whiteboards."""
         return await sync_to_async(self.get_user_whiteboards)(user, guest_name)
 
+    async def verify_session_access_async(
+        self,
+        board_id: str,
+        invite_code: Optional[str] = None,
+        user: Optional[User] = None,
+    ) -> tuple[bool, Optional[Dict[str, Any]], str]:
+        """Async verification of whiteboard session access via invite code or owner check."""
+        return await sync_to_async(self.verify_session_access)(
+            board_id=board_id,
+            invite_code=invite_code,
+            user=user,
+        )
+
+    async def get_whiteboard_by_invite_code_async(self, invite_code: str) -> Optional[Dict[str, Any]]:
+        """Async retrieval of whiteboard by invite code."""
+        return await sync_to_async(self.get_whiteboard_by_invite_code)(invite_code)
+
     # =========================================================================
     # Synchronous Methods (used by Dashboard REST views and tests)
     # =========================================================================
+
+    def verify_session_access(
+        self,
+        board_id: str,
+        invite_code: Optional[str] = None,
+        user: Optional[User] = None,
+    ) -> tuple[bool, Optional[Dict[str, Any]], str]:
+        """Synchronously verify whiteboard session access."""
+        is_allowed, wb, reason = self.repo.verify_access(
+            board_id=board_id,
+            invite_code=invite_code,
+            user=user,
+        )
+        return is_allowed, wb.to_dict() if wb else None, reason
+
+    def get_whiteboard_by_invite_code(self, invite_code: str) -> Optional[Dict[str, Any]]:
+        """Synchronously retrieve whiteboard by invite code."""
+        wb = self.repo.get_by_invite_code(invite_code)
+        return wb.to_dict() if wb else None
 
     def get_user_whiteboards(
         self,

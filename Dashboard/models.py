@@ -1,6 +1,12 @@
+import secrets
 import uuid
 from django.db import models
 from django.contrib.auth.models import User
+
+
+def generate_invite_code() -> str:
+    """Generate a unique uppercase 8-character invite code (e.g. 8A3F1B2C)."""
+    return secrets.token_hex(4).upper()
 
 
 class Whiteboard(models.Model):
@@ -10,6 +16,14 @@ class Whiteboard(models.Model):
     """
     id = models.CharField(max_length=128, primary_key=True)
     title = models.CharField(max_length=255, default="Untitled Whiteboard")
+    invite_code = models.CharField(
+        max_length=32,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Unique invite code required to join this whiteboard session",
+    )
     owner = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,
@@ -37,14 +51,30 @@ class Whiteboard(models.Model):
     def __str__(self):
         return f"{self.title} ({self.id}) [v{self.version}]"
 
+    def save(self, *args, **kwargs):
+        if not self.invite_code:
+            code = generate_invite_code()
+            while Whiteboard.objects.filter(invite_code=code).exists():
+                code = generate_invite_code()
+            self.invite_code = code
+        super().save(*args, **kwargs)
+
     def to_dict(self):
         shapes = self.snapshot.get("shapes", []) if isinstance(self.snapshot, dict) else []
+        owner_name = None
+        if self.owner_id is not None:
+            try:
+                owner_name = self.owner.username if self.owner else None
+            except Exception:
+                owner_name = None
+
         return {
             "id": self.id,
             "title": self.title,
-            "owner": self.owner.username if self.owner else None,
+            "invite_code": self.invite_code,
+            "owner": owner_name,
             "guest_name": self.guest_name,
-            "display_user": self.owner.username if self.owner else self.guest_name,
+            "display_user": owner_name or self.guest_name,
             "shape_count": len(shapes),
             "version": self.version,
             "snapshot": self.snapshot,

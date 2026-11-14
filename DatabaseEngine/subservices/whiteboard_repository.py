@@ -33,6 +33,8 @@ class WhiteboardRepository:
                 "version": 0,
             },
         )
+        if not whiteboard.invite_code:
+            whiteboard.save()
         if not created and user and not whiteboard.owner:
             # Associate anonymous board with user if user logs in
             whiteboard.owner = user
@@ -43,9 +45,50 @@ class WhiteboardRepository:
     def get_whiteboard(board_id: str) -> Optional[Whiteboard]:
         """Retrieves a whiteboard by its board ID."""
         try:
-            return Whiteboard.objects.get(id=board_id)
+            wb = Whiteboard.objects.select_related("owner").get(id=board_id)
+            if not wb.invite_code:
+                wb.save()
+            return wb
         except Whiteboard.DoesNotExist:
             return None
+
+    @staticmethod
+    def get_by_invite_code(invite_code: str) -> Optional[Whiteboard]:
+        """Retrieves an active whiteboard by its invite code."""
+        if not invite_code:
+            return None
+        code = invite_code.strip().upper()
+        return Whiteboard.objects.select_related("owner").filter(invite_code__iexact=code, is_active=True).first()
+
+    @staticmethod
+    def verify_access(
+        board_id: str,
+        invite_code: Optional[str] = None,
+        user: Optional[User] = None,
+    ) -> tuple[bool, Optional[Whiteboard], str]:
+        """
+        Validates if user or guest can access a session:
+        - Authenticated owner can access their own session.
+        - Any participant can access with matching invite code.
+        Returns: (is_allowed, whiteboard, reason)
+        """
+        try:
+            wb = Whiteboard.objects.select_related("owner").get(id=board_id)
+        except Whiteboard.DoesNotExist:
+            return False, None, "Whiteboard session not found"
+
+        if not wb.invite_code:
+            wb.save()
+
+        # Check owner access
+        if user and getattr(user, "is_authenticated", False) and wb.owner_id == user.id:
+            return True, wb, "Owner access"
+
+        # Check invite code access
+        if invite_code and wb.invite_code and wb.invite_code.upper() == invite_code.strip().upper():
+            return True, wb, "Invite code verified"
+
+        return False, wb, "Invalid or missing invite code"
 
     @staticmethod
     def save_session_closure(
