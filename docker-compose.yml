@@ -1,0 +1,178 @@
+services:
+  # 1. PostgreSQL database for persistent whiteboard and version storage
+  postgres:
+    image: postgres:16-alpine
+    container_name: canvas_postgres
+    environment:
+      POSTGRES_DB: canvas_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d canvas_db"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 2. Redis message broker for Django Channels cross-replica synchronization
+  redis:
+    image: redis:7-alpine
+    container_name: canvas_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. Database Migration Job: Runs once before backend replicas launch to prevent race conditions
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canvas_migration
+    command: python manage.py migrate --noinput
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_ENGINE=postgresql
+      - POSTGRES_DB=canvas_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DJANGO_ALLOWED_HOSTS=*
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # 4. Django ASGI Backend - Replica 1
+  backend-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canvas_backend_1
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      - REPLICA_ID=1
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_ENGINE=postgresql
+      - POSTGRES_DB=canvas_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DJANGO_ALLOWED_HOSTS=*
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # 5. Django ASGI Backend - Replica 2
+  backend-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canvas_backend_2
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      - REPLICA_ID=2
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_ENGINE=postgresql
+      - POSTGRES_DB=canvas_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DJANGO_ALLOWED_HOSTS=*
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # 6. Django ASGI Backend - Replica 3
+  backend-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canvas_backend_3
+    command: python manage.py runserver 0.0.0.0:8000
+    volumes:
+      - .:/app
+    environment:
+      - REPLICA_ID=3
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - DB_ENGINE=postgresql
+      - POSTGRES_DB=canvas_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgrespassword
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - DJANGO_ALLOWED_HOSTS=*
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # 7. React Frontend (Vite)
+  frontend:
+    build:
+      context: ../Drawer
+      dockerfile: Dockerfile
+    container_name: canvas_frontend
+    command: npm run dev -- --host 0.0.0.0
+    volumes:
+      - ../Drawer:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_PROXY_TARGET=http://nginx:80
+    restart: unless-stopped
+
+  # 8. Nginx Reverse Proxy & Load Balancer (Balancing traffic across the 3 replicas)
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: canvas_nginx
+    ports:
+      - "80:80"
+    depends_on:
+      - backend-1
+      - backend-2
+      - backend-3
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
